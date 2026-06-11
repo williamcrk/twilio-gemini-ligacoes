@@ -5,7 +5,6 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static("public"));
 
-// ── LOG em memória ─────────────────────────────────────────────
 const logs = [];
 function log(level, msg, data = null) {
   const entry = { ts: new Date().toISOString(), level, msg, data: data ? JSON.stringify(data).slice(0,200) : null };
@@ -14,17 +13,25 @@ function log(level, msg, data = null) {
   console.log(`[${level}] ${msg}`, data || "");
 }
 
-// ── Groq client ────────────────────────────────────────────────
 const GROQ_KEY = process.env.GROQ_API_KEY;
-if (!GROQ_KEY) log("WARN", "GROQ_API_KEY não definida!");
-
 const conversationHistory = {};
 
-const SYSTEM_PROMPT = `Você é um assistente de voz amigável falando em português brasileiro.
-Você está em uma ligação telefônica. Seja natural, cordial e conciso.
-Responda sempre em português, de forma clara e direta.
+// ── PROMPT DE CONSÓRCIO ────────────────────────────────────────
+const SYSTEM_PROMPT = `Você é um consultor de vendas especialista em consórcio da empresa Contemplax.
+Você está fazendo uma ligação telefônica para oferecer consórcio.
+Fale sempre em português brasileiro, de forma natural, amigável e profissional.
 Não use emojis ou formatação especial — sua resposta será convertida em áudio.
 Mantenha respostas curtas (máximo 2 frases) para a conversa fluir naturalmente.
+
+Seu objetivo é:
+1. Se apresentar como consultor da Contemplax
+2. Perguntar se a pessoa tem interesse em adquirir um bem (imóvel, veículo, etc) sem pagar juros
+3. Explicar brevemente como funciona o consórcio: sem juros, só taxa de administração, carta de crédito
+4. Tentar agendar uma conversa mais detalhada com um especialista
+5. Se a pessoa não tiver interesse, agradecer educadamente e encerrar
+
+Se perguntarem o valor das parcelas, diga que depende do bem desejado e que um especialista pode montar uma simulação gratuita.
+Se pedirem para ligar depois, pergunte o melhor horário e agradeça.
 Se a pessoa quiser encerrar, despeça-se educadamente.`;
 
 async function askGroq(messages) {
@@ -72,17 +79,17 @@ app.get("/diagnostico", (req, res) => {
 
 // ── WEBHOOK VOICE ──────────────────────────────────────────────
 app.post("/voice", async (req, res) => {
-  const callSid      = req.body.CallSid || "unknown";
-  const speechResult = req.body.SpeechResult;
-  const answeredBy   = req.body.AnsweredBy;
-  const SERVER_URL   = process.env.SERVER_URL || `https://${req.headers.host}`;
+  const callSid    = req.body.CallSid || "unknown";
+  const speech     = req.body.SpeechResult;
+  const answeredBy = req.body.AnsweredBy;
+  const SERVER_URL = process.env.SERVER_URL || `https://${req.headers.host}`;
 
-  log("INFO", `[VOICE] CallSid=${callSid} | AnsweredBy=${answeredBy} | Speech="${speechResult}"`);
+  log("INFO", `[VOICE] CallSid=${callSid} | AnsweredBy=${answeredBy} | Speech="${speech}"`);
 
+  // Caixa postal → desliga
   if (answeredBy && answeredBy.startsWith("machine")) {
-    log("INFO", `[AMD] Caixa postal — encerrando`);
-    return res.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response><Hangup/></Response>`);
+    log("INFO", "[AMD] Caixa postal detectada — encerrando");
+    return res.type("text/xml").send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
   }
 
   if (!conversationHistory[callSid]) {
@@ -91,15 +98,16 @@ app.post("/voice", async (req, res) => {
 
   let responseText = "";
 
-  if (!speechResult) {
-    responseText = "Olá! Tudo bem? Sou um assistente virtual. Como posso te ajudar hoje?";
-    log("INFO", `[VOICE] Saudação inicial`);
+  if (!speech) {
+    // Primeira fala — apresentação
+    responseText = "Olá, boa tarde! Aqui é o consultor da Contemplax Consórcios. Tudo bem? Tenho uma proposta especial para você adquirir um bem sem pagar juros. Posso te explicar rapidinho?";
+    log("INFO", "[VOICE] Saudação inicial de consórcio");
   } else {
-    conversationHistory[callSid].push({ role: "user", content: speechResult });
-    log("INFO", `[VOICE] Usuário disse: "${speechResult}"`);
+    conversationHistory[callSid].push({ role: "user", content: speech });
+    log("INFO", `[VOICE] Cliente disse: "${speech}"`);
 
     if (!GROQ_KEY) {
-      responseText = "Desculpe, o sistema está em manutenção. Tente mais tarde.";
+      responseText = "Desculpe, estamos com uma instabilidade. Posso retornar a ligação mais tarde?";
       log("ERROR", "GROQ_API_KEY ausente");
     } else {
       try {
@@ -108,7 +116,7 @@ app.post("/voice", async (req, res) => {
         log("INFO", `[GROQ] Resposta: "${responseText.slice(0, 100)}"`);
       } catch (err) {
         log("ERROR", `[GROQ] Erro: ${err.message}`);
-        responseText = "Desculpe, tive um problema. Pode repetir?";
+        responseText = "Desculpe, tive um probleminha. Pode repetir?";
       }
     }
   }
@@ -117,9 +125,9 @@ app.post("/voice", async (req, res) => {
 <Response>
   <Say voice="Google.pt-BR-Wavenet-A" language="pt-BR">${escapeXml(responseText)}</Say>
   <Gather input="speech" action="${SERVER_URL}/voice" method="POST"
-          language="pt-BR" speechTimeout="2" timeout="10">
+          language="pt-BR" speechTimeout="3" timeout="10">
   </Gather>
-  <Say voice="Google.pt-BR-Wavenet-A" language="pt-BR">Não ouvi nada. Até logo!</Say>
+  <Say voice="Google.pt-BR-Wavenet-A" language="pt-BR">Não ouvi nada. Obrigado e até logo!</Say>
   <Hangup/>
 </Response>`;
 
@@ -179,7 +187,7 @@ app.post("/status", (req, res) => {
   res.sendStatus(200);
 });
 
-app.get("/", (req, res) => res.send("✅ Servidor Twilio + Groq online. /diagnostico para detalhes."));
+app.get("/", (req, res) => res.send("✅ Servidor Twilio + Groq (Consórcio Contemplax) online."));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => log("INFO", `✅ Servidor rodando na porta ${PORT}`));
