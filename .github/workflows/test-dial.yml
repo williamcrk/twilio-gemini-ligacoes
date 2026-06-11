@@ -1,0 +1,73 @@
+name: Testar Ligação Completa
+
+on:
+  workflow_dispatch:
+    inputs:
+      telefone:
+        description: 'Número para testar (ex: +5511999990000)'
+        required: true
+        default: '+5511999990000'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Testar servidor /diagnostico
+        run: |
+          echo "=== DIAGNÓSTICO SERVIDOR ==="
+          curl -s --max-time 20 \
+            "https://twilio-gemini-ligacoes.onrender.com/diagnostico" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    print('Status:', d.get('status'))
+    print('SERVER_URL:', d.get('server_url'))
+    print('ENV:')
+    for k,v in d.get('env',{}).items():
+        print(f'  {k}: {v}')
+    print('Logs:')
+    for l in d.get('logs',[])[:10]:
+        print(f'  [{l[\"level\"]}] {l[\"msg\"]}')
+except Exception as e:
+    print('Erro:', e)
+    print(sys.stdin.read()[:500])
+"
+
+      - name: Testar /voice diretamente
+        run: |
+          echo ""
+          echo "=== TESTE /voice ==="
+          RESP=$(curl -s --max-time 20 -X POST \
+            "https://twilio-gemini-ligacoes.onrender.com/voice" \
+            -d "CallSid=test123&CallStatus=in-progress")
+          echo "$RESP"
+          if echo "$RESP" | grep -q "Olá"; then
+            echo "✅ /voice OK!"
+          else
+            echo "❌ /voice com problema"
+          fi
+
+      - name: Testar /dial (ligação real)
+        run: |
+          echo ""
+          echo "=== TESTE /dial ==="
+          RESP=$(curl -s --max-time 30 -X POST \
+            "https://twilio-gemini-ligacoes.onrender.com/dial" \
+            -H "Content-Type: application/json" \
+            -d "{\"phones\":[{\"nome\":\"Teste\",\"telefone\":\"${{ github.event.inputs.telefone }}\"}]}")
+          echo "$RESP"
+          echo "$RESP" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    for r in d.get('results',[]):
+        print(f'Nome: {r[\"nome\"]}')
+        print(f'Status: {r[\"status\"]}')
+        if r.get('callSid'): print(f'CallSid: {r[\"callSid\"]}')
+        if r.get('erro'):    print(f'ERRO: {r[\"erro\"]}')
+        if r.get('codigo'):  print(f'Código: {r[\"codigo\"]}')
+        if r.get('detalhes'): print(f'Detalhes: {r[\"detalhes\"]}')
+except Exception as e:
+    print('parse error:', e)
+    print(sys.stdin.read()[:500])
+"
