@@ -1,0 +1,70 @@
+name: Configurar Twilio Webhook
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar webhook do Twilio
+        run: |
+          SERVER_URL="https://twilio-gemini-ligacoes.onrender.com"
+          ACCOUNT_SID="${{ secrets.TWILIO_ACCOUNT_SID }}"
+          AUTH_TOKEN="${{ secrets.TWILIO_AUTH_TOKEN }}"
+
+          echo "🔍 Buscando números na conta Twilio..."
+          NUMBERS=$(curl -s -u "$ACCOUNT_SID:$AUTH_TOKEN" \
+            "https://api.twilio.com/2010-04-01/Accounts/$ACCOUNT_SID/IncomingPhoneNumbers.json")
+          
+          echo "$NUMBERS" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          numbers = data.get('incoming_phone_numbers', [])
+          print(f'Encontrados {len(numbers)} número(s)')
+          for n in numbers:
+              print(f'  SID: {n[\"sid\"]} | Número: {n[\"phone_number\"]}')
+          " 
+
+          # Pegar SID do primeiro número
+          NUMBER_SID=$(echo "$NUMBERS" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          numbers = data.get('incoming_phone_numbers', [])
+          if numbers:
+              print(numbers[0]['sid'])
+          ")
+
+          echo "📞 Configurando webhook para SID: $NUMBER_SID"
+
+          # Atualizar webhook do número
+          RESULT=$(curl -s -X POST \
+            -u "$ACCOUNT_SID:$AUTH_TOKEN" \
+            "https://api.twilio.com/2010-04-01/Accounts/$ACCOUNT_SID/IncomingPhoneNumbers/$NUMBER_SID.json" \
+            -d "VoiceUrl=$SERVER_URL/voice" \
+            -d "VoiceMethod=POST" \
+            -d "StatusCallback=$SERVER_URL/status" \
+            -d "StatusCallbackMethod=POST")
+
+          echo "$RESULT" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          print('✅ Webhook configurado!')
+          print(f'  Número: {data.get(\"phone_number\")}')
+          print(f'  VoiceUrl: {data.get(\"voice_url\")}')
+          " 2>/dev/null || echo "$RESULT"
+
+      - name: Testar servidor no Render
+        run: |
+          echo "🔍 Testando servidor..."
+          sleep 5
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            https://twilio-gemini-ligacoes.onrender.com/voice \
+            -X POST \
+            -d "CallSid=test123")
+          echo "Status do servidor: $STATUS"
+          if [ "$STATUS" = "200" ]; then
+            echo "✅ Servidor respondendo corretamente!"
+          else
+            echo "⚠️ Servidor retornou: $STATUS (pode estar iniciando ainda)"
+          fi

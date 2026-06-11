@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: twilio-gemini-ligacoes
+    runtime: node
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM
+        sync: false
+      - key: SERVER_URL
+        value: https://twilio-gemini-ligacoes.onrender.com

@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Central de Ligações — Gemini + Twilio</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; color: #1a1a1a; }
+    header { background: #1a1a2e; color: #fff; padding: 1rem 2rem; display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 18px; font-weight: 600; }
+    .badge { background: #00d97e22; color: #00d97e; font-size: 11px; padding: 3px 10px; border-radius: 20px; border: 1px solid #00d97e44; }
+    .badge.err { background: #ff4d4d22; color: #ff4d4d; border-color: #ff4d4d44; }
+    .container { max-width: 960px; margin: 1.5rem auto; padding: 0 1rem; display: grid; gap: 1rem; }
+    .card { background: #fff; border: 1px solid #e5e5e5; border-radius: 12px; padding: 1.25rem; }
+    .card h2 { font-size: 14px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #f0f0f0; color: #888; font-size: 11px; text-transform: uppercase; }
+    td { padding: 9px 10px; border-bottom: 1px solid #f5f5f5; }
+    input[type=text] { width: 100%; padding: 7px 9px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; font-family: inherit; }
+    input:focus { outline: none; border-color: #4361ee; }
+    .btn { padding: 8px 18px; border-radius: 8px; border: none; font-size: 13px; font-weight: 500; cursor: pointer; font-family: inherit; transition: .15s; }
+    .btn-primary { background: #4361ee; color: #fff; }
+    .btn-primary:hover { background: #2f4cdd; }
+    .btn-green { background: #00b474; color: #fff; }
+    .btn-green:hover { background: #009962; }
+    .btn-red { background: transparent; color: #e53e3e; border: 1px solid #e53e3e; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
+    .row-actions { display: flex; gap: 8px; margin-top: .75rem; align-items: center; flex-wrap: wrap; }
+    .add-row { display: flex; gap: 6px; margin-top: .75rem; }
+    .add-row input { flex: 1; }
+    .pill { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 500; }
+    .pill-pend { background: #fff8e1; color: #b7791f; }
+    .pill-dial { background: #ebf8ff; color: #2b6cb0; }
+    .pill-ok   { background: #f0fff4; color: #276749; }
+    .pill-err  { background: #fff5f5; color: #c53030; }
+    /* LOG */
+    #log-box { background: #0d1117; color: #c9d1d9; font-family: 'Courier New', monospace; font-size: 12px;
+               padding: 1rem; border-radius: 8px; height: 280px; overflow-y: auto; }
+    .log-err  { color: #ff7b72; }
+    .log-warn { color: #e3b341; }
+    .log-info { color: #79c0ff; }
+    /* DIAG */
+    .diag-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+    .diag-item { background: #f8f9fa; border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+    .diag-label { color: #888; font-size: 11px; margin-bottom: 2px; }
+  </style>
+</head>
+<body>
+<header>
+  <span style="font-size:22px">📞</span>
+  <h1>Central de Ligações</h1>
+  <span class="badge" id="srv-status">Verificando...</span>
+</header>
+
+<div class="container">
+  <!-- DIAGNÓSTICO -->
+  <div class="card">
+    <h2>🔍 Diagnóstico do Servidor</h2>
+    <div class="diag-grid" id="diag-grid">Carregando...</div>
+    <div style="margin-top:10px">
+      <button class="btn btn-primary btn-sm" onclick="loadDiag()">↻ Atualizar</button>
+    </div>
+  </div>
+
+  <!-- CONTATOS -->
+  <div class="card">
+    <h2>📋 Lista de Contatos</h2>
+    <table>
+      <thead><tr><th>Nome</th><th>Telefone (E.164)</th><th>Status</th><th></th></tr></thead>
+      <tbody id="tbody">
+        <tr data-id="1">
+          <td><input type="text" value="João Silva" placeholder="Nome"></td>
+          <td><input type="text" value="+5511999990001" placeholder="+5511999990001"></td>
+          <td><span class="pill pill-pend">Pendente</span></td>
+          <td><button class="btn btn-red btn-sm" onclick="this.closest('tr').remove()">✕</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="add-row">
+      <input type="text" id="n-nome" placeholder="Nome">
+      <input type="text" id="n-tel" placeholder="+5511999990000">
+      <button class="btn btn-primary" onclick="addRow()">+ Adicionar</button>
+    </div>
+    <div class="row-actions">
+      <button class="btn btn-green" onclick="startCalls()">▶ Iniciar Ligações</button>
+      <span id="counter" style="font-size:13px;color:#666"></span>
+    </div>
+  </div>
+
+  <!-- LOGS -->
+  <div class="card">
+    <h2>📟 Log em Tempo Real</h2>
+    <div id="log-box">Aguardando atividade...\n</div>
+    <div style="margin-top:8px;display:flex;gap:8px">
+      <button class="btn btn-primary btn-sm" onclick="loadLogs()">↻ Atualizar Logs</button>
+      <button class="btn btn-sm" style="border:1px solid #ddd" onclick="document.getElementById('log-box').textContent=''">🗑 Limpar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const BASE = window.location.origin;
+
+// ── DIAGNÓSTICO ───────────────────────────────────────────────
+async function loadDiag() {
+  try {
+    const r = await fetch(`${BASE}/diagnostico`);
+    const d = await r.json();
+    const badge = document.getElementById('srv-status');
+    badge.textContent = '✅ Online';
+    badge.className = 'badge';
+
+    const grid = document.getElementById('diag-grid');
+    grid.innerHTML = Object.entries(d.env).map(([k, v]) => `
+      <div class="diag-item">
+        <div class="diag-label">${k}</div>
+        <div>${v}</div>
+      </div>`).join('') +
+      `<div class="diag-item"><div class="diag-label">SERVER_URL</div><div>${d.server_url}</div></div>` +
+      `<div class="diag-item"><div class="diag-label">Conversas ativas</div><div>${d.conversasAtivas}</div></div>`;
+  } catch(e) {
+    document.getElementById('srv-status').textContent = '❌ Offline';
+    document.getElementById('srv-status').className = 'badge err';
+    document.getElementById('diag-grid').textContent = 'Erro ao conectar: ' + e.message;
+  }
+}
+
+// ── LOGS ──────────────────────────────────────────────────────
+async function loadLogs() {
+  try {
+    const r = await fetch(`${BASE}/diagnostico`);
+    const d = await r.json();
+    const box = document.getElementById('log-box');
+    box.innerHTML = d.logs.map(l => {
+      const cls = l.level === 'ERROR' ? 'log-err' : l.level === 'WARN' ? 'log-warn' : 'log-info';
+      const data = l.data ? ` | ${l.data}` : '';
+      return `<div class="${cls}">[${l.ts.slice(11,19)}] [${l.level}] ${l.msg}${data}</div>`;
+    }).join('') || '<div>Sem logs ainda.</div>';
+    box.scrollTop = 0;
+  } catch(e) {
+    appendLog('ERRO ao buscar logs: ' + e.message, 'log-err');
+  }
+}
+
+function appendLog(msg, cls='log-info') {
+  const box = document.getElementById('log-box');
+  const ts = new Date().toLocaleTimeString('pt-BR');
+  box.innerHTML = `<div class="${cls}">[${ts}] ${msg}</div>` + box.innerHTML;
+}
+
+// ── CONTATOS ──────────────────────────────────────────────────
+function addRow() {
+  const nome = document.getElementById('n-nome').value.trim();
+  const tel  = document.getElementById('n-tel').value.trim();
+  if (!nome || !tel) return alert('Preencha nome e telefone');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="text" value="${nome}"></td>
+    <td><input type="text" value="${tel}"></td>
+    <td><span class="pill pill-pend">Pendente</span></td>
+    <td><button class="btn btn-red btn-sm" onclick="this.closest('tr').remove()">✕</button></td>`;
+  document.getElementById('tbody').appendChild(tr);
+  document.getElementById('n-nome').value = '';
+  document.getElementById('n-tel').value = '';
+}
+
+function getContacts() {
+  return Array.from(document.querySelectorAll('#tbody tr')).map(tr => {
+    const ins = tr.querySelectorAll('input');
+    return { nome: ins[0].value.trim(), telefone: ins[1].value.trim() };
+  }).filter(c => c.nome && c.telefone);
+}
+
+function setStatus(idx, cls, label) {
+  const pill = document.querySelectorAll('#tbody tr')[idx]?.querySelector('.pill');
+  if (pill) { pill.className = `pill ${cls}`; pill.textContent = label; }
+}
+
+async function startCalls() {
+  const contacts = getContacts();
+  if (!contacts.length) return alert('Adicione ao menos um contato');
+
+  document.getElementById('counter').textContent = `Disparando ${contacts.length} ligação(ões)...`;
+  appendLog(`Iniciando ${contacts.length} ligação(ões)...`);
+
+  try {
+    const r = await fetch(`${BASE}/dial`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phones: contacts }),
+    });
+    const d = await r.json();
+
+    if (d.error) {
+      appendLog('❌ ERRO: ' + d.error, 'log-err');
+      document.getElementById('counter').textContent = 'Erro: ' + d.error;
+      return;
+    }
+
+    d.results.forEach((res, i) => {
+      if (res.status === 'disparado') {
+        setStatus(i, 'pill-dial', 'Ligando...');
+        appendLog(`✅ ${res.nome} (${res.telefone}) — SID: ${res.callSid}`);
+      } else {
+        setStatus(i, 'pill-err', 'Erro');
+        appendLog(`❌ ${res.nome} — ${res.erro} | Código: ${res.codigo} | ${res.detalhes}`, 'log-err');
+      }
+    });
+
+    document.getElementById('counter').textContent =
+      `${d.results.filter(r=>r.status==='disparado').length}/${d.total} ligações disparadas`;
+
+    // Atualizar logs do servidor após 5s
+    setTimeout(loadLogs, 5000);
+    setTimeout(loadLogs, 15000);
+    setTimeout(loadLogs, 30000);
+
+  } catch(e) {
+    appendLog('❌ Erro de conexão: ' + e.message, 'log-err');
+  }
+}
+
+// Iniciar
+loadDiag();
+setInterval(loadLogs, 20000); // atualiza logs a cada 20s
+</script>
+</body>
+</html>

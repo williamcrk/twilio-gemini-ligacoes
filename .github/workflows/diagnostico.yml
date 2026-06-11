@@ -1,0 +1,101 @@
+name: Diagnóstico Completo
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  diagnostico:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Executar diagnóstico
+        run: |
+          SERVER="https://twilio-gemini-ligacoes.onrender.com"
+          OUT="diagnostico-resultado.txt"
+
+          echo "=== DIAGNÓSTICO $(date -u) ===" > $OUT
+
+          echo -e "\n--- 1. Servidor ---" >> $OUT
+          curl -s --max-time 15 "$SERVER/" >> $OUT 2>&1 || echo "TIMEOUT/ERRO" >> $OUT
+
+          echo -e "\n--- 2. ENV vars (via /diagnostico) ---" >> $OUT
+          curl -s --max-time 15 "$SERVER/diagnostico" | python3 -c "
+          import sys, json
+          try:
+              d = json.load(sys.stdin)
+              print('Status:', d.get('status'))
+              print('SERVER_URL:', d.get('server_url'))
+              for k,v in d.get('env',{}).items(): print(f'  {k}: {v}')
+              print('--- Logs recentes ---')
+              for l in d.get('logs',[])[:15]:
+                  print(f'  [{l[\"level\"]}] {l[\"ts\"][11:19]} {l[\"msg\"]}')
+          except Exception as e:
+              print('ERRO parse:', e)
+          " >> $OUT 2>&1
+
+          echo -e "\n--- 3. Teste /voice ---" >> $OUT
+          VOICE=$(curl -s --max-time 15 -X POST "$SERVER/voice" \
+            -d "CallSid=diag_$(date +%s)&CallStatus=in-progress" 2>&1)
+          if echo "$VOICE" | grep -q "<Say"; then
+            echo "✅ /voice OK" >> $OUT
+            echo "$VOICE" | grep -o '<Say[^>]*>[^<]*</Say>' | head -2 >> $OUT
+          else
+            echo "❌ /voice FALHOU: $VOICE" >> $OUT
+          fi
+
+          echo -e "\n--- 4. Twilio ---" >> $OUT
+          curl -s --max-time 10 -u \
+            "${{ secrets.TWILIO_ACCOUNT_SID }}:${{ secrets.TWILIO_AUTH_TOKEN }}" \
+            "https://api.twilio.com/2010-04-01/Accounts/${{ secrets.TWILIO_ACCOUNT_SID }}.json" | python3 -c "
+          import sys, json
+          try:
+              d = json.load(sys.stdin)
+              if 'friendly_name' in d:
+                  print('✅ Conta:', d['friendly_name'], '| Status:', d['status'])
+              else:
+                  print('❌', d.get('message'), '| Code:', d.get('code'))
+          except Exception as e: print('ERRO:', e)
+          " >> $OUT 2>&1
+
+          echo -e "\n--- 5. Números Twilio e webhooks ---" >> $OUT
+          curl -s --max-time 10 -u \
+            "${{ secrets.TWILIO_ACCOUNT_SID }}:${{ secrets.TWILIO_AUTH_TOKEN }}" \
+            "https://api.twilio.com/2010-04-01/Accounts/${{ secrets.TWILIO_ACCOUNT_SID }}/IncomingPhoneNumbers.json" | python3 -c "
+          import sys, json
+          try:
+              d = json.load(sys.stdin)
+              for n in d.get('incoming_phone_numbers',[]):
+                  print(f'Número: {n[\"phone_number\"]}')
+                  print(f'  VoiceUrl: {n.get(\"voice_url\",\"NAO CONFIGURADO\")}')
+                  print(f'  StatusCallback: {n.get(\"status_callback\",\"NAO CONFIGURADO\")}')
+          except Exception as e: print('ERRO:', e)
+          " >> $OUT 2>&1
+
+          echo -e "\n--- 6. Gemini ---" >> $OUT
+          curl -s --max-time 15 -X POST \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d '{"contents":[{"parts":[{"text":"Diga apenas OK"}]}]}' | python3 -c "
+          import sys, json
+          try:
+              d = json.load(sys.stdin)
+              t = d['candidates'][0]['content']['parts'][0]['text']
+              print('✅ Gemini OK:', t.strip())
+          except Exception as e:
+              print('❌ Erro:', e)
+          " >> $OUT 2>&1
+
+          echo -e "\n=== FIM ===" >> $OUT
+          cat $OUT
+
+      - name: Commit resultado no repo
+        run: |
+          git config user.email "diagnostico@github-actions.com"
+          git config user.name "GitHub Actions"
+          git add diagnostico-resultado.txt
+          git diff --staged --quiet || git commit -m "Resultado diagnóstico $(date -u '+%Y-%m-%d %H:%M')"
+          git push

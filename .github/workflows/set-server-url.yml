@@ -1,0 +1,70 @@
+name: Configurar SERVER_URL no Render
+
+on:
+  workflow_dispatch:
+    inputs:
+      render_api_key:
+        description: 'Render API Key'
+        required: true
+      service_id:
+        description: 'Render Service ID (srv-...)'
+        required: true
+
+jobs:
+  set-env:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar variáveis do servidor
+        run: |
+          RENDER_KEY="${{ github.event.inputs.render_api_key }}"
+          SERVICE_ID="${{ github.event.inputs.service_id }}"
+          SERVER_URL="https://twilio-gemini-ligacoes.onrender.com"
+
+          echo "Configurando SERVER_URL=$SERVER_URL no Render..."
+
+          # Buscar envVars atuais
+          CURRENT=$(curl -s \
+            -H "Authorization: Bearer $RENDER_KEY" \
+            "https://api.render.com/v1/services/$SERVICE_ID/env-vars")
+          
+          echo "EnvVars atuais:"
+          echo "$CURRENT" | python3 -c "
+          import sys, json
+          try:
+              data = json.load(sys.stdin)
+              for v in data:
+                  k = v.get('envVar',{})
+                  print(f'  {k.get(\"key\")}: {str(k.get(\"value\",\"\"))[:30]}')
+          except Exception as e:
+              print('Erro:', e)
+              print(sys.stdin.read())
+          " 2>/dev/null || echo "$CURRENT"
+
+          # Atualizar SERVER_URL
+          RESULT=$(curl -s -X PUT \
+            -H "Authorization: Bearer $RENDER_KEY" \
+            -H "Content-Type: application/json" \
+            "https://api.render.com/v1/services/$SERVICE_ID/env-vars" \
+            -d "[
+              {\"key\": \"GEMINI_API_KEY\",      \"value\": \"${{ secrets.GEMINI_API_KEY }}\"},
+              {\"key\": \"TWILIO_ACCOUNT_SID\",  \"value\": \"${{ secrets.TWILIO_ACCOUNT_SID }}\"},
+              {\"key\": \"TWILIO_AUTH_TOKEN\",   \"value\": \"${{ secrets.TWILIO_AUTH_TOKEN }}\"},
+              {\"key\": \"TWILIO_FROM\",         \"value\": \"${{ secrets.TWILIO_FROM }}\"},
+              {\"key\": \"SERVER_URL\",          \"value\": \"$SERVER_URL\"}
+            ]")
+
+          echo "Resultado:"
+          echo "$RESULT" | python3 -c "
+          import sys, json
+          try:
+              data = json.load(sys.stdin)
+              if isinstance(data, list):
+                  print('✅ Variáveis configuradas com sucesso!')
+                  for v in data:
+                      k = v.get('envVar',{})
+                      print(f'  {k.get(\"key\")}: OK')
+              else:
+                  print('Resposta:', json.dumps(data, indent=2))
+          except:
+              print(sys.stdin.read())
+          " 2>/dev/null || echo "$RESULT"

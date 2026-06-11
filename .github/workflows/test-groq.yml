@@ -1,0 +1,78 @@
+name: Testar Groq
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Testar Groq API e servidor
+        run: |
+          KEY="${{ secrets.GROQ_API_KEY }}"
+          OUT="diagnostico-resultado.txt"
+          echo "=== TESTE GROQ $(date -u) ===" > $OUT
+
+          echo "--- Groq API ---" >> $OUT
+          curl -s --max-time 15 -X POST \
+            "https://api.groq.com/openai/v1/chat/completions" \
+            -H "Authorization: Bearer $KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"model":"llama-3.1-8b-instant","messages":[{"role":"user","content":"Diga apenas: OLA"}],"max_tokens":10}' \
+          | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    if 'choices' in d:
+        print('GROQ OK:', d['choices'][0]['message']['content'])
+    else:
+        print('GROQ ERRO:', d.get('error', d))
+except Exception as e:
+    print('parse error:', e)
+" | tee -a $OUT
+
+          echo "" >> $OUT
+          echo "--- /voice endpoint ---" >> $OUT
+          VOICE=$(curl -s --max-time 25 -X POST \
+            "https://twilio-gemini-ligacoes.onrender.com/voice" \
+            -d "CallSid=test_$(date +%s)&CallStatus=in-progress")
+          echo "$VOICE" >> $OUT
+          if echo "$VOICE" | grep -q "<Say"; then
+            echo "✅ VOICE OK - TwiML valido!" >> $OUT
+          else
+            echo "❌ VOICE FALHOU" >> $OUT
+          fi
+
+          echo "" >> $OUT
+          echo "--- /diagnostico ---" >> $OUT
+          curl -s --max-time 25 \
+            "https://twilio-gemini-ligacoes.onrender.com/diagnostico" \
+          | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    print('Status:', d.get('status'))
+    for k,v in d.get('env',{}).items():
+        print(f'  {k}: {v}')
+    print('Logs recentes:')
+    for l in d.get('logs',[])[:8]:
+        print(f'  [{l[\"level\"]}] {l[\"msg\"]}')
+except Exception as e:
+    print('Erro:', e, sys.stdin.read()[:300])
+" >> $OUT 2>&1
+
+          echo "=== FIM ===" >> $OUT
+          cat $OUT
+
+      - name: Commit resultado
+        run: |
+          git config user.email "bot@github.com"
+          git config user.name "GitHub Actions"
+          git add diagnostico-resultado.txt
+          git diff --staged --quiet || git commit -m "Teste Groq $(date -u +%H:%M)"
+          git push

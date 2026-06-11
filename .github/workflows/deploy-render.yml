@@ -1,0 +1,38 @@
+name: Deploy no Render
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Criar serviço no Render
+        run: |
+          echo "Criando serviço no Render..."
+          RESPONSE=$(curl -s -X POST "https://api.render.com/v1/services" \
+            -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "type": "web_service",
+              "name": "twilio-gemini-ligacoes",
+              "ownerId": "${{ secrets.RENDER_OWNER_ID }}",
+              "repo": "https://github.com/williamcrk/twilio-gemini-ligacoes",
+              "branch": "main",
+              "buildCommand": "npm install",
+              "startCommand": "node server.js",
+              "plan": "free",
+              "envVars": [
+                {"key":"GEMINI_API_KEY","value":"${{ secrets.GEMINI_API_KEY }}"},
+                {"key":"TWILIO_ACCOUNT_SID","value":"${{ secrets.TWILIO_ACCOUNT_SID }}"},
+                {"key":"TWILIO_AUTH_TOKEN","value":"${{ secrets.TWILIO_AUTH_TOKEN }}"},
+                {"key":"TWILIO_FROM","value":"${{ secrets.TWILIO_FROM }}"}
+              ]
+            }')
+          SERVICE_URL=$(echo $RESPONSE | python3 -c "import sys,json; r=json.load(sys.stdin); s=r.get('service',{}); print(s.get('serviceDetails',{}).get('url','pendente'))" 2>/dev/null || echo "ver dashboard render.com")
+          echo "✅ Serviço criado! URL: $SERVICE_URL"
+          echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_OUTPUT

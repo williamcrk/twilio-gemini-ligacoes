@@ -1,0 +1,68 @@
+name: Testar Groq
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Testar Groq API
+        run: |
+          KEY="${{ secrets.GROQ_API_KEY }}"
+          OUT="diagnostico-resultado.txt"
+          echo "=== TESTE GROQ $(date -u) ===" > $OUT
+
+          RESP=$(curl -s --max-time 15 -X POST \
+            "https://api.groq.com/openai/v1/chat/completions" \
+            -H "Authorization: Bearer $KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"model":"llama-3.1-8b-instant","messages":[{"role":"user","content":"Diga apenas OK"}],"max_tokens":10}')
+
+          echo "$RESP" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    if 'choices' in d:
+        print('✅ Groq OK! Resposta:', d['choices'][0]['message']['content'])
+    else:
+        print('❌ Erro:', d.get('error',d))
+except Exception as e:
+    print('ERRO parse:', e)
+" | tee -a $OUT
+
+          echo "" >> $OUT
+
+          # Testar servidor /voice
+          echo "--- Teste /voice ---" >> $OUT
+          curl -s --max-time 15 -X POST \
+            "https://twilio-gemini-ligacoes.onrender.com/voice" \
+            -d "CallSid=groq_test_$(date +%s)&CallStatus=in-progress" >> $OUT 2>&1
+
+          echo "" >> $OUT
+
+          # Diagnóstico do servidor
+          echo "--- Diagnostico servidor ---" >> $OUT
+          curl -s --max-time 15 \
+            "https://twilio-gemini-ligacoes.onrender.com/diagnostico" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    for k,v in d.get('env',{}).items():
+        print(f'  {k}: {v}')
+except: print(sys.stdin.read()[:300])
+" >> $OUT 2>&1
+
+          cat $OUT
+
+      - name: Commit
+        run: |
+          git config user.email "bot@github.com"
+          git config user.name "GitHub Actions"
+          git add diagnostico-resultado.txt
+          git diff --staged --quiet || git commit -m "Teste Groq $(date -u +%H:%M)"
+          git push
